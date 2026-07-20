@@ -41,6 +41,11 @@ _FETCH_CONCURRENCY = 5
 # How deep the fallback link crawl follows same-domain links from the homepage.
 _LINK_CRAWL_DEPTH = 2
 
+# A page needs at least this many words to count as "usable" content. The graph's
+# conditional edge (task 1.2) fails the run when fewer than 3 usable pages exist.
+MIN_USABLE_WORDS = 50
+MIN_USABLE_PAGES = 3
+
 
 def _origin(url: str) -> str:
     """Scheme + host, e.g. https://example.com -- the base for robots/sitemap."""
@@ -289,4 +294,16 @@ async def crawl_site(state: AuditState) -> dict[str, Any]:
     if brand_name is None and pages:
         brand_name = pages[0].title
 
-    return {"pages": pages, "brand_name": brand_name, "errors": errors}
+    # Task 1.2 gate: a run needs >= MIN_USABLE_PAGES pages with real content. A
+    # JS-only site (empty shells, no extractable text) trips this and the graph's
+    # conditional edge routes straight to END. We set the status here because the
+    # routing function cannot mutate state -- it only reads this decision.
+    updates: dict[str, Any] = {"pages": pages, "brand_name": brand_name, "errors": errors}
+    usable = sum(1 for p in pages if p.word_count >= MIN_USABLE_WORDS)
+    if usable < MIN_USABLE_PAGES:
+        errors.append(
+            f"insufficient content: found {usable} usable page(s) "
+            f"(>= {MIN_USABLE_WORDS} words), need {MIN_USABLE_PAGES}"
+        )
+        updates["status"] = "failed_insufficient_content"
+    return updates
