@@ -1,0 +1,56 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+jobs:
+  backend:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: backend
+    services:
+      postgres:
+        image: pgvector/pgvector:pg16
+        env:
+          POSTGRES_USER: citesight
+          POSTGRES_PASSWORD: citesight
+          POSTGRES_DB: citesight_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U citesight"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      DATABASE_URL: postgresql+asyncpg://citesight:citesight@localhost:5432/citesight_test
+      ANTHROPIC_API_KEY: test-not-real
+      OPENAI_API_KEY: test-not-real
+      GOOGLE_API_KEY: test-not-real
+      TEMPORAL_ADDRESS: localhost:7233
+      TEMPORAL_NAMESPACE: default
+      TEMPORAL_TASK_QUEUE: audits
+    steps:
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v8
+      - run: uv sync --all-extras --dev
+      - run: uv run ruff check .
+      - run: uv run mypy app
+      - run: uv run alembic upgrade head
+      - run: uv run pytest
+
+  frontend:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: "24"
+      - run: npm ci
+      - run: npm run build
