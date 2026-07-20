@@ -1,0 +1,127 @@
+services:
+  postgres:
+    image: pgvector/pgvector:pg16
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-citesight}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-citesight}
+      POSTGRES_DB: ${POSTGRES_DB:-citesight}
+    ports:
+      - "5433:5432" # 5432 is already bound by a local, non-Docker postgres on this host
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-citesight} -d ${POSTGRES_DB:-citesight}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  temporal:
+    image: temporalio/auto-setup:1.29.7
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      DB: postgres12
+      DB_PORT: 5432
+      POSTGRES_USER: ${POSTGRES_USER:-citesight}
+      POSTGRES_PWD: ${POSTGRES_PASSWORD:-citesight}
+      POSTGRES_SEEDS: postgres
+      DYNAMIC_CONFIG_FILE_PATH: config/dynamicconfig/docker.yaml
+    ports:
+      - "7233:7233"
+    healthcheck:
+      # temporal-server binds to the container's own IP (not 127.0.0.1),
+      # so resolve it dynamically rather than hardcoding loopback.
+      test: ["CMD-SHELL", "bash -c 'echo > /dev/tcp/$(hostname -i)/7233' || exit 1"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 180s
+
+  temporal-ui:
+    image: temporalio/ui:2.52.1
+    depends_on:
+      temporal:
+        condition: service_healthy
+    environment:
+      TEMPORAL_ADDRESS: temporal:7233
+      TEMPORAL_CORS_ORIGINS: http://localhost:5173
+    ports:
+      - "8233:8080"
+
+  migrate:
+    build: ./backend
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-citesight}:${POSTGRES_PASSWORD:-citesight}@postgres:5432/${POSTGRES_DB:-citesight}
+    command: ["uv", "run", "alembic", "upgrade", "head"]
+
+  backend:
+    build: ./backend
+    depends_on:
+      postgres:
+        condition: service_healthy
+      temporal:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+    environment:
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-citesight}:${POSTGRES_PASSWORD:-citesight}@postgres:5432/${POSTGRES_DB:-citesight}
+      TEMPORAL_ADDRESS: temporal:7233
+      TEMPORAL_NAMESPACE: ${TEMPORAL_NAMESPACE:-default}
+      TEMPORAL_TASK_QUEUE: ${TEMPORAL_TASK_QUEUE:-audits}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      GOOGLE_API_KEY: ${GOOGLE_API_KEY:-}
+      MAX_PAGES: ${MAX_PAGES:-30}
+      MAX_QUERIES: ${MAX_QUERIES:-15}
+      TOKEN_BUDGET: ${TOKEN_BUDGET:-150000}
+    ports:
+      - "8000:8000"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request as u,sys; sys.exit(0 if u.urlopen('http://localhost:8000/health').status==200 else 1)"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  worker:
+    build: ./backend
+    command: ["python", "-m", "app.worker"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+      temporal:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+    environment:
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-citesight}:${POSTGRES_PASSWORD:-citesight}@postgres:5432/${POSTGRES_DB:-citesight}
+      TEMPORAL_ADDRESS: temporal:7233
+      TEMPORAL_NAMESPACE: ${TEMPORAL_NAMESPACE:-default}
+      TEMPORAL_TASK_QUEUE: ${TEMPORAL_TASK_QUEUE:-audits}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      GOOGLE_API_KEY: ${GOOGLE_API_KEY:-}
+    healthcheck:
+      # python:3.14-slim has no procps (no pgrep); PID 1 is the worker process
+      # directly since command is exec-form, so check /proc instead.
+      test: ["CMD-SHELL", "grep -q app.worker /proc/1/cmdline || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+  frontend:
+    build: ./frontend
+    ports:
+      - "5173:5173"
+    healthcheck:
+      test: ["CMD", "node", "-e", "require('http').get('http://localhost:5173/', r => process.exit(r.statusCode===200?0:1)).on('error', () => process.exit(1))"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+volumes:
+  pgdata:
