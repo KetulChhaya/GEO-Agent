@@ -13,7 +13,7 @@ from sqlalchemy.dialects.postgresql import insert as pg_insert
 from app.config import get_settings
 from app.db.models import Audit, Chunk
 from app.db.session import async_session
-from app.graph.state import AuditState
+from app.graph.state import AuditState, PageMeta
 from app.llm.base import TokenBudgetTracker
 from app.llm.embeddings import OpenAIEmbeddingsClient
 
@@ -21,6 +21,21 @@ from app.llm.embeddings import OpenAIEmbeddingsClient
 # matches, overlapped so a claim spanning a boundary is not split in half.
 CHUNK_SIZE = 800
 CHUNK_OVERLAP = 100
+
+
+def _chunk_pages(pages: list[PageMeta]) -> tuple[list[str], list[dict[str, Any]]]:
+    """Split every page into overlapping chunks. Pure and deterministic (same
+    pages in -> same chunks out), so it can be unit-tested without DB/embeddings.
+    Returns parallel lists of chunk texts and their metadata."""
+    splitter = RecursiveCharacterTextSplitter(chunk_size=CHUNK_SIZE, chunk_overlap=CHUNK_OVERLAP)
+
+    texts: list[str] = []
+    metadatas: list[dict[str, Any]] = []
+    for page in pages:
+        for index, chunk_text in enumerate(splitter.split_text(page.content)):
+            texts.append(chunk_text)
+            metadatas.append({"url": page.url, "title": page.title, "chunk_index": index})
+    return texts, metadatas
 
 
 async def chunk_and_embed(state: AuditState) -> dict[str, Any]:
@@ -31,16 +46,7 @@ async def chunk_and_embed(state: AuditState) -> dict[str, Any]:
     """
     settings = get_settings()
 
-    splitter = RecursiveCharacterTextSplitter(
-        chunk_size=CHUNK_SIZE, chunk_overlap=CHUNK_OVERLAP
-    )
-
-    texts: list[str] = []
-    metadatas: list[dict[str, Any]] = []
-    for page in state.pages:
-        for index, chunk_text in enumerate(splitter.split_text(page.content)):
-            texts.append(chunk_text)
-            metadatas.append({"url": page.url, "title": page.title, "chunk_index": index})
+    texts, metadatas = _chunk_pages(state.pages)
 
     if not texts:
         return {"chunk_count": 0}

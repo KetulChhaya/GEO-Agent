@@ -248,6 +248,16 @@ async def _fetch_page(
     return url, resp.text
 
 
+def _make_client() -> httpx.AsyncClient:
+    """The one place the crawler's HTTP client is built. Isolated so tests can
+    monkeypatch it to inject an httpx.MockTransport and run without a network."""
+    return httpx.AsyncClient(
+        headers={"User-Agent": USER_AGENT},
+        follow_redirects=True,
+        timeout=15.0,
+    )
+
+
 async def crawl_site(state: AuditState) -> dict[str, Any]:
     """Crawl the site at `state.url`, returning extracted pages and brand name.
 
@@ -260,11 +270,7 @@ async def crawl_site(state: AuditState) -> dict[str, Any]:
     base_url = state.url
     origin = _origin(base_url)
 
-    async with httpx.AsyncClient(
-        headers={"User-Agent": USER_AGENT},
-        follow_redirects=True,
-        timeout=15.0,
-    ) as client:
+    async with _make_client() as client:
         robots = await _load_robots(client, origin, errors)
         urls = await _discover_urls(client, base_url, robots, max_pages)
 

@@ -11,8 +11,10 @@ from tenacity import retry, stop_after_attempt, wait_exponential
 
 from app.llm.base import BudgetExceeded, TokenBudgetTracker
 
-# text-embedding-3-small returns 1536-d vectors [0.1, -0.23, 0.45, ..., 0.12]  (1536 dims) irrespective of the length of the text (higher the length, possibly loss of information), matching the chunks.embedding
-# column (Vector(1536)). Batch cap comes from the plan's cost guardrails.
+# text-embedding-3-small returns 1536-d vectors [0.1, -0.23, 0.45, ..., 0.12] (1536 dims)
+# irrespective of the length of the text (higher the length, possibly loss of information),
+# matching the chunks.embedding column (Vector(1536)). Batch cap comes from the plan's cost
+# guardrails.
 DEFAULT_EMBED_MODEL = "text-embedding-3-small"
 EMBED_DIMENSIONS = 1536
 MAX_BATCH = 100
